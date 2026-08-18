@@ -1,0 +1,171 @@
+name: Sync from upstream
+
+# Pulls new commits from the read-only upstream into this fork by opening a PR.
+# Never pushes to main and never touches upstream: the branch below is the only
+# thing this workflow writes, and integration stays a reviewed merge.
+
+on:
+  schedule:
+    - cron: '0 3 * * 1' # Mondays, 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/addyosmani/agent-skills.git
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    name: Merge upstream into a review branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Configure git identity
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch upstream --prune
+          git fetch origin --prune
+
+      - name: Check whether upstream is ahead
+        id: check
+        run: |
+          behind=$(git rev-list --count origin/main..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          if [ "$behind" -eq 0 ]; then
+            echo "Fork already contains every upstream commit — nothing to sync."
+          else
+            echo "Upstream is ahead by $behind commit(s)."
+            git log --oneline origin/main..upstream/main > /tmp/newcommits.txt
+          fi
+
+      - name: Merge upstream into the sync branch
+        id: merge
+        if: steps.check.outputs.behind != '0'
+        run: |
+          git checkout -B "$SYNC_BRANCH" origin/main
+          if git merge upstream/main --no-edit; then
+            echo 'conflict=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'conflict=true' >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt
+            git merge --abort
+          fi
+
+      # PRs opened with GITHUB_TOKEN do not trigger other workflows, so the
+      # normal CI would not run on this PR. Run the same gates here instead.
+      - name: Run validators on the merged tree
+        id: validate
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          set +e
+          status=0
+          : > /tmp/validation.md
+          for cmd in \
+            'node scripts/validate-skills.js' \
+            'node scripts/validate-reference-links.js' \
+            'node scripts/validate-commands.js' \
+            'node scripts/validate-artifact-paths.js' \
+            'node scripts/validate-versions.js' \
+            'node scripts/run-evals.js --min-rank1 80'; do
+            out=$($cmd 2>&1); code=$?
+            if [ "$code" -eq 0 ]; then mark='PASSED'; else mark='FAILED'; status=1; fi
+            summary=$(printf '%s' "$out" | tail -2 | tr -d '\r' | paste -sd' ' - | cut -c1-160)
+            printf -- '- `%s` — **%s** — %s\n' "$cmd" "$mark" "$summary" >> /tmp/validation.md
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat /tmp/validation.md
+
+      - name: Push the sync branch
+        if: steps.merge.outputs.conflict == 'false'
+        run: git push --force-with-lease origin "$SYNC_BRANCH"
+
+      - name: Open or update the sync pull request
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ '${{ steps.validate.outputs.status }}' = '0' ]; then
+            verdict='All validators passed on the merged tree — safe to merge.'
+          else
+            verdict='**A validator failed on the merged tree — review before merging.**'
+          fi
+
+          {
+            echo "Upstream (\`addyosmani/agent-skills\`) is ahead by ${{ steps.check.outputs.behind }} commit(s)."
+            echo
+            echo "$verdict"
+            echo
+            echo '### Validators'
+            cat /tmp/validation.md
+            echo
+            echo '### Upstream commits in this sync'
+            echo '```'
+            cat /tmp/newcommits.txt
+            echo '```'
+            echo
+            echo '_Opened automatically by the weekly `Sync from upstream` workflow. It merges upstream into `sync/upstream`; nothing is pushed to `main` and nothing is ever sent to upstream._'
+          } > /tmp/body.md
+
+          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          title="chore: sync ${{ steps.check.outputs.behind }} commit(s) from upstream"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file /tmp/body.md
+            echo "Updated PR #$existing"
+          else
+            gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file /tmp/body.md
+          fi
+
+      - name: Report conflicts instead of merging
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo 'The weekly upstream sync could not merge cleanly, so no PR was opened and `main` was left untouched.'
+            echo
+            echo '### Conflicting files'
+            echo '```'
+            cat /tmp/conflicts.txt
+            echo '```'
+            echo
+            echo '### Upstream commits waiting to be merged'
+            echo '```'
+            cat /tmp/newcommits.txt
+            echo '```'
+            echo
+            echo 'Resolve locally:'
+            echo '```bash'
+            echo 'git fetch upstream'
+            echo 'git checkout -B sync/upstream origin/main'
+            echo 'git merge upstream/main   # resolve, then run the validators'
+            echo '```'
+          } > /tmp/issue.md
+
+          existing=$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/issue.md
+          else
+            gh issue create --title 'Upstream sync conflict' --body-file /tmp/issue.md
+          fi
+          exit 1
