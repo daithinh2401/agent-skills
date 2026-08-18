@@ -54,6 +54,7 @@ jobs:
           echo "behind=$behind" >> "$GITHUB_OUTPUT"
           if [ "$behind" -eq 0 ]; then
             echo "Fork already contains every upstream commit — nothing to sync."
+            echo 'Fork is already up to date with upstream — no PR opened.' >> "$GITHUB_STEP_SUMMARY""
           else
             echo "Upstream is ahead by $behind commit(s)."
             git log --oneline origin/main..upstream/main > /tmp/newcommits.txt
@@ -127,6 +128,8 @@ jobs:
             echo '_Opened automatically by the weekly `Sync from upstream` workflow. It merges upstream into `sync/upstream`; nothing is pushed to `main` and nothing is ever sent to upstream._'
           } > /tmp/body.md
 
+          cat /tmp/body.md >> "$GITHUB_STEP_SUMMARY"
+
           existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
           title="chore: sync ${{ steps.check.outputs.behind }} commit(s) from upstream"
           if [ -n "$existing" ]; then
@@ -162,10 +165,19 @@ jobs:
             echo '```'
           } > /tmp/issue.md
 
-          existing=$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body-file /tmp/issue.md
+          # The job summary is the primary channel: it always works and a failed
+          # scheduled run notifies the owner. Issues are best-effort — this fork
+          # has them disabled, so never let that failure mask the conflict.
+          cat /tmp/issue.md >> "$GITHUB_STEP_SUMMARY"
+
+          if gh issue list --state open --limit 1 >/dev/null 2>&1; then
+            existing=$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq '.[0].number // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body-file /tmp/issue.md || true
+            else
+              gh issue create --title 'Upstream sync conflict' --body-file /tmp/issue.md || true
+            fi
           else
-            gh issue create --title 'Upstream sync conflict' --body-file /tmp/issue.md
+            echo 'Issues are disabled on this repository — conflict reported in the job summary only.'
           fi
           exit 1
