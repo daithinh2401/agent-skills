@@ -58,8 +58,8 @@ A subagent session is **fresh**: it auto-loads the project's rules files and hoo
 ## Execution protocol
 
 - **STOP conditions in every prompt:** "if an API mismatches expectations, a verification fails without an obvious fix, or the environment blocks you — STOP and report; never improvise around a broken assumption, never fight machine state." The orchestrator owns the environment; the agent owns the task.
-- **Resume over respawn.** Follow-ups go to the same agent (its transcript persists) — a fix costs a delta, not a re-brief. Respawn only for genuinely new tasks.
-- **One committer at a time.** Two concurrently-committing agents race the git index. Parallel spawns are for read-only work (reviews, research) only.
+- **Resume over respawn, where the platform allows it.** If your agent runtime can message an existing agent, send follow-ups there — its transcript persists, so a fix costs a delta, not a re-brief. If subagents are one-shot (they terminate after returning), the card is what makes a respawn cheap: update the card, then point the new agent at it instead of re-briefing from scratch.
+- **One committer per working tree.** Two agents committing into the same tree race the git index, so parallel spawns sharing a checkout must be read-only (reviews, research). To parallelize *writing*, give each agent its own git worktree — see [git-workflow-and-versioning](../git-workflow-and-versioning/SKILL.md#working-with-worktrees) — and merge the branches yourself.
 - **Required report format:** verification outcomes (one line each), evidence for each acceptance, commit hash, deviations. Honest deviations are welcome; silent smoothing is a violation.
 
 ## Verification pyramid (orchestrator side)
@@ -73,7 +73,7 @@ Spot-check only — the agent already ran the gates: (1) commit exists + working
 | "The top model will just do it faster itself" | Bulk implementation on the top tier is the single largest avoidable spend; the contract exists so cheaper models produce the same output |
 | "The acceptance is obvious from context" | An agent under debugging pressure will verify against a synthetic stand-in unless the card names the exact command, the exact observable, and forbids substitutes |
 | "The agent can figure out the environment" | It will — by burning tool calls on archaeology the orchestrator already did. Paste env-facts |
-| "Easier to respawn than explain" | A resume costs a delta message; a respawn costs the whole briefing again |
+| "Easier to respawn than explain" | A resume costs a delta message. If resuming is not available, an updated card still beats a re-brief — the expensive part is re-deriving the context, not re-spawning |
 | "I'll just paste the full rulebook to be safe" | Attention dilutes; the 3–5 rules that matter get lost among the ones that don't |
 
 ## Red Flags
@@ -81,15 +81,16 @@ Spot-check only — the agent already ran the gates: (1) commit exists + working
 - A spawn prompt written from scratch when a card file should exist
 - Acceptance criteria without an exact command + observable
 - An agent debugging Docker/keychain/network state instead of stopping
-- Two agents with commit rights running at once
+- Two agents committing into the same working tree at once (no worktree isolation)
 - The orchestrator re-running a full gate suite the agent already ran
-- Re-briefing an existing agent from zero instead of messaging it
+- Re-briefing from zero when a reachable agent could be messaged, or when an updated card would do
 
 ## See Also
 
 - [`orchestration-patterns`](../../references/orchestration-patterns.md) — multi-agent topology (fan-out, pipelines, anti-patterns) this contract sits inside
 - [planning-and-task-breakdown](../planning-and-task-breakdown/SKILL.md) — produces the plan items each card executes
 - [incremental-implementation](../incremental-implementation/SKILL.md) — the per-slice discipline a subagent follows inside a card
+- [git-workflow-and-versioning](../git-workflow-and-versioning/SKILL.md#working-with-worktrees) — worktree isolation, the way to parallelize agents that write
 - [documentation-and-adrs](../documentation-and-adrs/SKILL.md) — where environment lessons and recurring traps get recorded
 
 ## Verification
