@@ -1,0 +1,43 @@
+{
+  "skill_name": "delegation-orchestration",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "I'm about to dispatch this implementation task to a subagent — how should I write the spawn prompt so it does not need re-work?",
+        "top_k": 3
+      },
+      {
+        "prompt": "Write the task cards for this milestone before I hand them off to implementation agents",
+        "top_k": 3
+      },
+      {
+        "prompt": "My subagents keep returning work that fails verification and I keep re-spawning them, and token spend on bulk implementation is climbing",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Write a failing test for the date parser before I implement it"
+      },
+      {
+        "prompt": "Format this file with prettier"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need to hand an implementation task to a Sonnet subagent. Set up the delegation so it produces committable work without re-briefing.",
+      "expected_output": "A card-based spawn contract: model tier, cited rules, env-facts, evidence-based acceptance, and an orchestrator-side spot-check plan",
+      "files": [
+        "delegation-orchestration"
+      ],
+      "expectations": [
+        "Work is placed on the appropriate model tier rather than kept on the top model by default",
+        "A task card carries the goal, cited rules, steps, and evidence-based acceptance instead of an ad-hoc prompt",
+        "Acceptance names an exact command and observable, and synthetic substitutes are forbidden",
+        "The orchestrator spot-checks evidence rather than re-running full gates on unchanged code"
+      ]
+    }
+  ]
+}
