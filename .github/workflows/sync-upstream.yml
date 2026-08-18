@@ -54,7 +54,7 @@ jobs:
           echo "behind=$behind" >> "$GITHUB_OUTPUT"
           if [ "$behind" -eq 0 ]; then
             echo "Fork already contains every upstream commit — nothing to sync."
-            echo 'Fork is already up to date with upstream — no PR opened.' >> "$GITHUB_STEP_SUMMARY""
+            echo 'Fork is already up to date with upstream — no PR opened.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Upstream is ahead by $behind commit(s)."
             git log --oneline origin/main..upstream/main > /tmp/newcommits.txt
