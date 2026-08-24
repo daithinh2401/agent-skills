@@ -120,6 +120,24 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
+      - name: DEBUG app token access
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "app token present: $([ -n "$APP_TOKEN" ] && echo yes || echo NO)"
+          echo "--- GET pulls (read) ---"
+          curl -s -o /tmp/get.json -w 'HTTP %{http_code}\n' \
+            -H "Authorization: Bearer $APP_TOKEN" -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/daithinh2401/agent-skills/pulls || true
+          echo "--- POST pulls (create, dry look at error body) ---"
+          curl -s -o /tmp/post.json -w 'HTTP %{http_code}\n' -X POST \
+            -H "Authorization: Bearer $APP_TOKEN" -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/daithinh2401/agent-skills/pulls \
+            -d '{"title":"perm-probe","head":"sync/upstream","base":"main"}' || true
+          echo "--- error message field ---"
+          cat /tmp/post.json | head -c 400; echo
+
       - name: Open or update the sync pull request
         if: steps.merge.outputs.conflict == 'false'
         env:
