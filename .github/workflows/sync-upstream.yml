@@ -101,10 +101,24 @@ jobs:
         if: steps.merge.outputs.conflict == 'false'
         run: git push --force-with-lease origin "$SYNC_BRANCH"
 
+      # Mint a short-lived (~1h) installation token from the sync GitHub App.
+      # This is what lets the workflow open PRs: unlike GITHUB_TOKEN, an App
+      # token carries pull-requests write on this fork. continue-on-error keeps
+      # the run green before the App is configured or if the key is rotated out
+      # — the PR step then falls back to GITHUB_TOKEN and the manual link.
+      - name: Mint GitHub App token
+        id: app-token
+        if: steps.merge.outputs.conflict == 'false'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+
       - name: Open or update the sync pull request
         if: steps.merge.outputs.conflict == 'false'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: |
           if [ '${{ steps.validate.outputs.status }}' = '0' ]; then
             verdict='All validators passed on the merged tree — safe to merge.'
@@ -154,7 +168,7 @@ jobs:
             else
               echo "### Action could not open the PR — open it manually"
               echo
-              echo "The branch $SYNC_BRANCH is pushed and validated; only PR creation was blocked (GITHUB_TOKEN lacks pull-requests write on this fork). Open the PR here:"
+              echo "The branch $SYNC_BRANCH is pushed and validated; PR creation did not run (the sync GitHub App is not configured, or its token was unavailable). Open the PR here:"
               echo
               echo "$compare"
             fi
