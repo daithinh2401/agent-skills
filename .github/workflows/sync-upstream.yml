@@ -114,6 +114,11 @@ jobs:
         with:
           app-id: ${{ secrets.SYNC_APP_ID }}
           private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          # Request exactly what opening the PR needs. If the App lacks these,
+          # the mint fails loudly here instead of yielding a token that silently
+          # cannot create PRs.
+          permission-contents: read
+          permission-pull-requests: write
 
       - name: Open or update the sync pull request
         if: steps.merge.outputs.conflict == 'false'
