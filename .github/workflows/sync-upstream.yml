@@ -128,16 +128,39 @@ jobs:
             echo '_Opened automatically by the weekly `Sync from upstream` workflow. It merges upstream into `sync/upstream`; nothing is pushed to `main` and nothing is ever sent to upstream._'
           } > /tmp/body.md
 
-          cat /tmp/body.md >> "$GITHUB_STEP_SUMMARY"
-
-          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
           title="chore: sync ${{ steps.check.outputs.behind }} commit(s) from upstream"
+          compare="${{ github.server_url }}/${{ github.repository }}/compare/main...$SYNC_BRANCH?expand=1"
+
+          # Opening the PR needs a pull-requests-write GITHUB_TOKEN. On this fork
+          # that permission is not granted even with the repo setting enabled, so
+          # PR creation is best-effort: the branch is already pushed and validated,
+          # and a failure here must not fail the run. If it fails, the summary
+          # carries a one-click compare link to open the PR by hand.
+          pr_ok=0
+          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$title" --body-file /tmp/body.md
-            echo "Updated PR #$existing"
+            if gh pr edit "$existing" --title "$title" --body-file /tmp/body.md; then
+              echo "Updated PR #$existing"; pr_ok=1
+            fi
           else
-            gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file /tmp/body.md
+            if gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file /tmp/body.md; then
+              pr_ok=1
+            fi
           fi
+
+          {
+            if [ "$pr_ok" = '1' ]; then
+              echo "### Sync PR is open/updated"
+            else
+              echo "### Action could not open the PR — open it manually"
+              echo
+              echo "The branch $SYNC_BRANCH is pushed and validated; only PR creation was blocked (GITHUB_TOKEN lacks pull-requests write on this fork). Open the PR here:"
+              echo
+              echo "$compare"
+            fi
+            echo
+            cat /tmp/body.md
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report conflicts instead of merging
         if: steps.merge.outputs.conflict == 'true'
