@@ -22,6 +22,9 @@ jobs:
       - name: Validate all skills
         run: node scripts/validate-skills.js
 
+      - name: Test skill lint rules
+        run: node --test scripts/lib/skill-lint-test.js
+
       - name: Validate manifest versions
         run: node scripts/validate-versions.js
 
@@ -32,13 +35,16 @@ jobs:
         run: node --test scripts/run-evals-test.js
 
       - name: Run skill evals (trigger + routing)
-        run: node scripts/run-evals.js --min-rank1 80
+        run: node scripts/run-evals.js --min-rank1 95
 
       - name: Validate references/ links in skills
         run: node scripts/validate-reference-links.js
 
       - name: Test reference-link validator
         run: node --test scripts/validate-reference-links-test.js
+
+      - name: Test session-start hook payload
+        run: bash hooks/session-start-test.sh
 
   validate-commands:
     name: Validate command parity and description sync
