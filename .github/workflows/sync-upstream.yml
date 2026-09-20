@@ -27,9 +27,29 @@ jobs:
     name: Merge upstream into a review branch
     runs-on: ubuntu-latest
     steps:
+      # Mint the App token first so checkout persists App credentials for the
+      # push. Unlike GITHUB_TOKEN, an App token with `workflows` write can push
+      # upstream commits that touch .github/workflows/. continue-on-error keeps
+      # the run green if the App is unconfigured or its key is rotated out —
+      # checkout then falls back to GITHUB_TOKEN (a workflow-file push fails as
+      # before, surfaced in the run) and the PR step falls back to the link.
+      - name: Mint GitHub App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          # contents:write + workflows:write let the push carry upstream changes
+          # to .github/workflows/; pull-requests:write opens the sync PR.
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -100,25 +120,6 @@ jobs:
       - name: Push the sync branch
         if: steps.merge.outputs.conflict == 'false'
         run: git push --force-with-lease origin "$SYNC_BRANCH"
-
-      # Mint a short-lived (~1h) installation token from the sync GitHub App.
-      # This is what lets the workflow open PRs: unlike GITHUB_TOKEN, an App
-      # token carries pull-requests write on this fork. continue-on-error keeps
-      # the run green before the App is configured or if the key is rotated out
-      # — the PR step then falls back to GITHUB_TOKEN and the manual link.
-      - name: Mint GitHub App token
-        id: app-token
-        if: steps.merge.outputs.conflict == 'false'
-        continue-on-error: true
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.SYNC_APP_ID }}
-          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
-          # Request exactly what opening the PR needs. If the App lacks these,
-          # the mint fails loudly here instead of yielding a token that silently
-          # cannot create PRs.
-          permission-contents: read
-          permission-pull-requests: write
 
       - name: Open or update the sync pull request
         if: steps.merge.outputs.conflict == 'false'
