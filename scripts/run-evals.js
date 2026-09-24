@@ -473,6 +473,34 @@ function parseGrading(raw, expectations) {
   return g;
 }
 
+function extractExecutorModel(trace) {
+  for (const line of trace.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'system' && event.subtype === 'init') {
+        return event.model || null;
+      }
+    } catch { continue; }
+  }
+  return null;
+}
+
+function clearGradingSlot(base) {
+  fs.rmSync(`${base}.grading.json`, { force: true });
+  fs.rmSync(`${base}.grading.raw.txt`, { force: true });
+}
+
+function persistGradingOutcome(base, grading, raw, runMeta) {
+  if (!grading) {
+    fs.writeFileSync(`${base}.grading.raw.txt`, raw);
+    return false;
+  }
+  const output = runMeta ? { ...grading, run: runMeta } : grading;
+  fs.writeFileSync(`${base}.grading.json`, JSON.stringify(output, null, 2) + '\n');
+  return true;
+}
+
 // Skill name must be a valid kebab-case identifier — no path separators,
 // no "..", no absolute paths. Without this, --behavioral "../../x" would
 // resolve to files outside the project tree for both reads and writes.
@@ -518,6 +546,8 @@ function runBehavioral(skillName, dryRun) {
       console.log(`[dry-run] eval ${ev.id}: ${artifact}; claude -p --verbose --output-format stream-json --permission-mode acceptEdits --allowedTools ${EXECUTOR_TOOLS} --append-system-prompt <${skillName}/SKILL.md> < prompt-on-stdin`);
       continue;
     }
+    const base = path.join(RESULTS_DIR, `${skillName}.eval-${ev.id}`);
+    clearGradingSlot(base);
     const workspace = kind === 'dialogue'
       ? fs.mkdtempSync(path.join(os.tmpdir(), 'agent-skills-dialogue-eval-'))
       : materializeWorkspace(ev);
@@ -557,14 +587,16 @@ function runBehavioral(skillName, dryRun) {
     // argv, or it would blow past the OS argument-size limit (E2BIG).
     const raw = execFileSync('claude', ['-p'], { input: graderPrompt, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: GRADER_TIMEOUT_MS });
     const grading = parseGrading(raw, ev.expectations);
-    const base = path.join(RESULTS_DIR, `${skillName}.eval-${ev.id}`);
-    if (!grading) {
-      fs.writeFileSync(`${base}.grading.raw.txt`, raw);
+    const runMeta = {
+      executor_model: extractExecutorModel(trace),
+      grader_model: 'unknown',
+      timestamp: new Date().toISOString(),
+    };
+    if (!persistGradingOutcome(base, grading, raw, runMeta)) {
       console.log(`  ✗  eval ${ev.id}: grader returned invalid JSON — raw saved to ${path.relative(ROOT, base)}.grading.raw.txt`);
       failures++;
       continue;
     }
-    fs.writeFileSync(`${base}.grading.json`, JSON.stringify(grading, null, 2) + '\n');
     console.log(`eval ${ev.id}: ${grading.summary.passed}/${grading.summary.total} expectations passed -> ${path.relative(ROOT, base)}.grading.json`);
     if (grading.summary.passed < grading.summary.total) failures++;
     } finally {
@@ -603,4 +635,4 @@ function main(args = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { materializeWorkspace, parseGrading };
+module.exports = { materializeWorkspace, parseGrading, clearGradingSlot, persistGradingOutcome, extractExecutorModel };

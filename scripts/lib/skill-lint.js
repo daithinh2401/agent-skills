@@ -304,11 +304,12 @@ function lintSkill(dirName, skillsDir, knownSkills) {
   return lintSkillContent(dirName, content, knownSkills);
 }
 
-// Export only the linting functions. The policy collections (REQUIRED_SECTIONS,
+// Export only functions. The policy collections (REQUIRED_SECTIONS,
 // SECTION_EXEMPT_SKILLS, SKILL_REF_PATTERNS, and the regexes) stay private so a
 // test or future consumer cannot mutate shared state and change lint results for
 // the rest of the process. Exercise the rules through these functions.
 module.exports = {
+  stripFencedCodeBlocks,
   parseFrontmatter,
   extractSkillReferences,
   lintSkillContent,
