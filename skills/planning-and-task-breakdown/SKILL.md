@@ -54,6 +54,8 @@ Database schema
 
 Implementation order follows the dependency graph bottom-up: build foundations first.
 
+For changes to existing code, do not draw this graph from memory: follow the `impact-analysis-with-gitnexus` skill and use its Impact Report as the graph. Every d=1 dependent and every affected execution flow becomes a task or an acceptance criterion; UNKNOWN and CRITICAL rows go in Risks and Mitigations. Without GitNexus the skill leaves a one-line note and you map dependents by reading and grep.
+
 ### Step 3: Slice Vertically
 
 Instead of building all the database, then all the API, then all the UI — build one complete feature path at a time:
@@ -246,6 +248,7 @@ Before starting implementation, confirm:
 - [ ] Every task has acceptance criteria
 - [ ] Every task has a verification step
 - [ ] Task dependencies are identified and ordered correctly
+- [ ] For a change to existing code, every direct dependent in the Impact Report has a task or acceptance criterion (or the plan states GitNexus was unavailable)
 - [ ] Tasks are recorded in the task list target (default `tasks/todo.md`)
 - [ ] No pre-existing incomplete plan was overwritten without explicit user confirmation
 - [ ] No task touches more than ~5 files

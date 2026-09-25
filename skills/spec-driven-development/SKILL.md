@@ -81,6 +81,8 @@ ASSUMPTIONS I'M MAKING:
 
 Don't silently fill in ambiguous requirements. The spec's entire purpose is to surface misunderstandings *before* code gets written — assumptions are the most dangerous form of misunderstanding.
 
+**Measure the blast radius before writing Boundaries.** When the change touches existing code, follow the `impact-analysis-with-gitnexus` skill first. Its Impact Report goes under Boundaries as "Callers and dependents this spec accounts for", each direct dependent becomes a success criterion, and each unknown becomes an open question. Without GitNexus the skill leaves a one-line note and you map dependents by hand.
+
 **Write a spec document covering these six core areas:**
 
 1. **Objective** — What are we building and why? Who is the user? What does success look like?
@@ -246,6 +248,7 @@ Before proceeding to implementation, confirm:
 - [ ] The human has reviewed and approved the spec
 - [ ] Success criteria are specific and testable
 - [ ] Boundaries (Always/Ask First/Never) are defined
+- [ ] For a change to existing code, the spec carries an Impact section (or the "GitNexus unavailable" line) and every direct dependent has a success criterion
 - [ ] The spec is saved to a file in the repository
 - [ ] If the request bundles several independently testable capabilities, a capability map (module ids, dependency direction, build order) was approved before any module spec was written
 - [ ] Every module spec traces to a module id in the approved map

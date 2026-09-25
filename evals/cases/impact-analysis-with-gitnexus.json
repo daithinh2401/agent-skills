@@ -1,0 +1,59 @@
+{
+  "skill_name": "impact-analysis-with-gitnexus",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Before we plan this change, check the code knowledge graph: what calls validateUser and which execution flows break if I change it?",
+        "top_k": 3
+      },
+      {
+        "prompt": "Use GitNexus to give me the blast radius of refactoring the session service before I write the spec",
+        "top_k": 3
+      },
+      {
+        "prompt": "Is the GitNexus index for this repo stale? Re-index it and tell me every caller of toError that the plan has to cover",
+        "top_k": 3
+      },
+      {
+        "prompt": "I have a grep list of who uses this function but I'm not sure it's complete — run an impact analysis on it before we break the work into tasks",
+        "top_k": 3
+      },
+      {
+        "prompt": "Before I commit, check that my diff only affects what the plan's impact report said it would and that every caller got a test",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Write a spec for a brand-new billing module that has no code yet",
+        "owner": "spec-driven-development"
+      },
+      {
+        "prompt": "Break this PRD into ordered implementation tasks with acceptance criteria",
+        "owner": "planning-and-task-breakdown"
+      },
+      {
+        "prompt": "The checkout test fails intermittently — find the root cause",
+        "owner": "debugging-and-error-recovery"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "We need validateUser in src/validate.js to also return false unless user.emailVerified === true. Before any code is written, plan the change so every place that depends on validateUser keeps working and is covered by tests.",
+      "expected_output": "A plan whose dependency graph is grounded in an explicit impact gate: either a GitNexus-derived Impact Report (index freshness stated, safe re-index used) or a one-line statement that GitNexus is unavailable with a source-derived dependency map; loginHandler and apiMiddleware identified as direct dependents, the registerRoutes handler wiring and the /api/report route identified as blind spots the call graph cannot see; each dependent mapped to a task or acceptance criterion with a test; risk rated with a reason and the auth path not rated LOW on caller count alone",
+      "files": [
+        "impact-analysis-with-gitnexus"
+      ],
+      "expectations": [
+        "The plan states explicitly whether a GitNexus knowledge graph was available. If it was not, it contains a line saying GitNexus is unavailable and that the dependency map is source-derived, and it contains no fabricated graph output (no invented depth tables, confidence percentages, or process names)",
+        "If GitNexus was available, the plan records the indexed commit or freshness and any indexing was run with the --index-only flag, never plain analyze",
+        "loginHandler (src/login.js) and apiMiddleware (src/middleware.js) are listed as direct dependents of validateUser, and registerRoutes passing the handlers by reference plus the /api/report route gated by apiMiddleware are called out as dependents that a call graph or name grep does not show",
+        "Every listed dependent maps to at least one task or acceptance criterion that names a test for it (login rejection, middleware rejection, route wiring)",
+        "A risk level is stated with a reason; the auth-gating nature of the change is named and the risk is not rated LOW merely because few callers were found"
+      ]
+    }
+  ]
+}
