@@ -147,6 +147,85 @@ function parseFrontmatter(content) {
 }
 
 /**
+ * Report frontmatter that this file's own parser accepts but a real YAML
+ * parser rejects.
+ *
+ * `parseFrontmatter` above splits each line on its first colon. That is enough
+ * to read `name` and `description`, and it is deliberately forgiving — but it
+ * means a SKILL.md whose frontmatter is not valid YAML passes every check here.
+ * The hosts that consume these skills do not share that forgiveness: Cursor
+ * parses the frontmatter as YAML when a skill is attached to a message, and a
+ * parse failure there fails the whole request with a generic server error and
+ * takes the rest of the chat's context with it (#494).
+ *
+ * So the repo could ship frontmatter that breaks a host while CI stayed green.
+ * That was verified once by hand, against all 25 skills, in the #494 thread;
+ * this makes it a check instead of a memory.
+ *
+ * Scope is deliberately narrow — the three shapes a strict parser rejects and
+ * the split-on-first-colon parser does not, confirmed against ruby's psych:
+ *
+ *   description: Use this: when X    unquoted value with a colon-space: YAML
+ *                                    reads a nested mapping and errors
+ *   \tkey: value                      tab indentation: invalid YAML whitespace
+ *   description: "unterminated       an unclosed quote
+ *
+ * It is not a YAML implementation. This repo has no package.json and therefore
+ * no parser to depend on, so the check stays a small set of rules aimed at the
+ * classes actually observed to break a host. No current frontmatter uses block
+ * scalars or multi-line values, and the check assumes that stays true; add a
+ * rule here rather than loosening one if it changes.
+ */
+function frontmatterYamlErrors(content) {
+  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/);
+  if (!match) return [];
+
+  const errors = [];
+  const lines = match[1].split(/\r?\n/);
+  lines.forEach((line, i) => {
+    const lineNo = i + 2; // the opening `---` is line 1
+    if (!line.trim()) return;
+
+    if (/^[ ]*\t/.test(line)) {
+      errors.push(
+        `Frontmatter line ${lineNo} indents with a tab — YAML forbids tabs in indentation, ` +
+        `so a host that parses this frontmatter rejects the whole file`
+      );
+      return;
+    }
+
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) return;
+    const value = line.slice(colonIdx + 1).trim();
+    if (!value) return;
+
+    const quote = value[0] === '"' || value[0] === "'" ? value[0] : null;
+    if (quote) {
+      // An opening quote must close. `endsWith` is enough here because a
+      // trailing comment after a quoted scalar does not appear in this repo.
+      if (value.length < 2 || !value.endsWith(quote)) {
+        errors.push(
+          `Frontmatter line ${lineNo} opens a ${quote === '"' ? 'double' : 'single'} quote that never closes — ` +
+          `a host parsing this frontmatter as YAML rejects the whole file`
+        );
+      }
+      return;
+    }
+
+    // Unquoted scalar. A colon followed by a space (or ending the line) makes
+    // YAML read a nested mapping where a plain string was meant.
+    if (/:(\s|$)/.test(value)) {
+      errors.push(
+        `Frontmatter line ${lineNo} has an unquoted value containing ': ' — YAML reads that as a ` +
+        `nested mapping and rejects the file; wrap the value in quotes`
+      );
+    }
+  });
+
+  return errors;
+}
+
+/**
  * Collect all explicit skill cross-references from content.
  * Only matches against the SKILL_REF_PATTERNS list to avoid
  * false-positives from inline code snippets.
@@ -182,6 +261,10 @@ function lintSkillContent(dirName, content, knownSkills) {
     errors.push('Missing or malformed YAML frontmatter (expected --- block at top of file)');
     return { errors, warnings, exempt };
   }
+
+  // The parser above is forgiving by design; the hosts that read this
+  // frontmatter are not (#494).
+  errors.push(...frontmatterYamlErrors(content));
 
   if (!fm.name) {
     errors.push("Frontmatter missing required field: 'name'");
@@ -311,6 +394,7 @@ function lintSkill(dirName, skillsDir, knownSkills) {
 module.exports = {
   stripFencedCodeBlocks,
   parseFrontmatter,
+  frontmatterYamlErrors,
   extractSkillReferences,
   lintSkillContent,
   lintSkill,

@@ -103,6 +103,93 @@ test('passes when a skill colocates its own references directory', () => {
   assert.match(result.stdout, /1 skills checked — 0 error\(s\) — PASSED/);
 });
 
+test('passes when a skill reference file reaches the shared checklist three levels up', () => {
+  // A file under skills/<name>/references/ sits one directory deeper than
+  // SKILL.md, so the shared checklists are three levels up from it, not two.
+  const root = makeSandbox();
+  writeFile(root, 'references/security-checklist.md', '# Security\n');
+  writeFile(root, 'skills/hardening/SKILL.md', 'See [patterns](references/patterns.md).\n');
+  writeFile(
+    root,
+    'skills/hardening/references/patterns.md',
+    'Shared checklists live in `../../../references/security-checklist.md`.\n'
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /✓ {2}skills\/hardening\/references\/patterns\.md/);
+  assert.match(result.stdout, /1 skills checked — 0 error\(s\) — PASSED/);
+});
+
+test('fails when a skill reference file links the shared checklist with the SKILL.md prefix', () => {
+  // The same off-by-a-level mistake this validator exists to catch, made from
+  // inside the skill's references/ directory: the link is resolved from the
+  // file that contains it, so `../../` stops at skills/.
+  const root = makeSandbox();
+  writeFile(root, 'references/security-checklist.md', '# Security\n');
+  writeFile(root, 'skills/hardening/SKILL.md', 'See [patterns](references/patterns.md).\n');
+  writeFile(
+    root,
+    'skills/hardening/references/patterns.md',
+    ['# Patterns', '', 'See `../../references/security-checklist.md`.', ''].join('\n')
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /✓ {2}skills\/hardening\/SKILL\.md/);
+  assert.match(result.stdout, /✗ {2}skills\/hardening\/references\/patterns\.md/);
+  assert.match(
+    result.stdout,
+    /L3: \.\.\/\.\.\/references\/security-checklist\.md — resolves to skills\/references\/security-checklist\.md/
+  );
+  assert.match(result.stdout, /1 skills checked — 1 error\(s\) — FAILED/);
+  assert.match(result.stdout, /use `\.\.\/\.\.\/\.\.\/references\/<file>\.md`/);
+});
+
+test('keeps the same narrow rule inside a skill reference file', () => {
+  // Same exemptions as SKILL.md: fenced examples, sibling files named without
+  // a references/ prefix, and artifacts that do not exist yet.
+  const root = makeSandbox();
+  writeFile(root, 'references/security-checklist.md', '# Security\n');
+  writeFile(root, 'skills/hardening/SKILL.md', 'See [patterns](references/patterns.md).\n');
+  writeFile(
+    root,
+    'skills/hardening/references/patterns.md',
+    [
+      'Record findings in `SECURITY.md` or `docs/threat-model.md`. See also `other-patterns.md`.',
+      '',
+      '```markdown',
+      '[wrong on purpose](../../references/security-checklist.md)',
+      '```',
+      '',
+    ].join('\n')
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /1 skills checked — 0 error\(s\) — PASSED/);
+});
+
+test('counts errors from SKILL.md and its reference files together', () => {
+  const root = makeSandbox();
+  writeFile(root, 'references/security-checklist.md', '# Security\n');
+  writeFile(root, 'skills/hardening/SKILL.md', 'See `references/security-checklist.md`.\n');
+  writeFile(root, 'skills/hardening/references/a.md', 'See `../../references/security-checklist.md`.\n');
+  writeFile(root, 'skills/hardening/references/b.md', 'See `../../../references/security-checklist.md`.\n');
+  writeFile(root, 'skills/hardening/references/notes.txt', 'See ../../references/security-checklist.md\n');
+
+  const result = run(root);
+
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /✗ {2}skills\/hardening\/references\/a\.md/);
+  assert.match(result.stdout, /✓ {2}skills\/hardening\/references\/b\.md/);
+  assert.doesNotMatch(result.stdout, /notes\.txt/);
+  assert.match(result.stdout, /1 skills checked — 2 error\(s\) — FAILED/);
+});
+
 test('fails when a link points at a checklist that no longer exists', () => {
   const root = makeSandbox();
   writeFile(root, 'references/definition-of-done.md', '# Definition of Done\n');

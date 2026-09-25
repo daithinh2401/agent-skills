@@ -249,3 +249,91 @@ test('CRLF line endings are handled', () => {
   const result = lintSkillContent('fenced', content, FENCE_KNOWN);
   assert.equal(overviewMissing(result), true);
 });
+
+// ── Frontmatter must be valid YAML, not merely splittable ────────────────────
+// `parseFrontmatter` splits each line on its first colon, which is forgiving by
+// design. The hosts that read these skills are not: Cursor parses the
+// frontmatter as YAML when a skill is attached to a message, and a parse
+// failure fails the whole request and takes the chat's context with it (#494).
+// Each shape below was confirmed rejected by a strict parser (ruby psych) while
+// passing every other check in this linter.
+
+/** Frontmatter that is otherwise complete, so only YAML validity varies. */
+function fmLines(...lines) {
+  return withAllSections(['---', 'name: alpha', ...lines, '---'].join('\n'));
+}
+
+const yamlErrors = result => result.errors.filter(e => e.startsWith('Frontmatter line '));
+
+test('a valid frontmatter reports no YAML error', () => {
+  const result = lintSkillContent('alpha', fmLines('description: Use when you need alpha'), KNOWN);
+  assert.deepEqual(yamlErrors(result), []);
+});
+
+test('an unquoted value containing a colon is rejected', () => {
+  // YAML reads `Use when: X` as a nested mapping and errors; the split-on-first
+  // -colon parser reads it as a plain string and never notices.
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: Use when you need alpha: auth, secrets and review'),
+    KNOWN,
+  );
+  assert.equal(yamlErrors(result).length, 1);
+  assert.match(yamlErrors(result)[0], /unquoted value containing/);
+});
+
+test('quoting the same value makes it valid again', () => {
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: "Use when you need alpha: auth, secrets and review"'),
+    KNOWN,
+  );
+  assert.deepEqual(yamlErrors(result), []);
+});
+
+test('a colon with no trailing space is left alone', () => {
+  // `https://example.com` is a perfectly good YAML scalar. The rule keys on
+  // colon-space, not on colons, so ordinary URLs do not trip it.
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: Use when you need alpha', 'docs: https://example.com/a:b'),
+    KNOWN,
+  );
+  assert.deepEqual(yamlErrors(result), []);
+});
+
+test('a tab used for indentation is rejected', () => {
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: Use when you need alpha', 'meta:', '\tlevel: core'),
+    KNOWN,
+  );
+  assert.equal(yamlErrors(result).length, 1);
+  assert.match(yamlErrors(result)[0], /indents with a tab/);
+});
+
+test('an unterminated quote is rejected', () => {
+  const result = lintSkillContent('alpha', fmLines('description: "Use when you need alpha'), KNOWN);
+  assert.equal(yamlErrors(result).length, 1);
+  assert.match(yamlErrors(result)[0], /never closes/);
+});
+
+test('a duplicate key is not reported, because YAML accepts it', () => {
+  // Deliberate boundary: `safe_load` accepts duplicate keys, so flagging them
+  // here would fail files no host rejects. The rule tracks the parser, not taste.
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: Use when you need alpha', 'description: Use when you need alpha'),
+    KNOWN,
+  );
+  assert.deepEqual(yamlErrors(result), []);
+});
+
+test('the error names the line so the fix is obvious', () => {
+  const result = lintSkillContent(
+    'alpha',
+    fmLines('description: Use when you need alpha', 'owner: team: platform'),
+    KNOWN,
+  );
+  assert.match(yamlErrors(result)[0], /^Frontmatter line 4 /);
+});
