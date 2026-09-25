@@ -1,8 +1,10 @@
 name: Sync from upstream
 
 # Pulls new commits from the read-only upstream into this fork by opening a PR.
-# Never pushes to main and never touches upstream: the branch below is the only
-# thing this workflow writes, and integration stays a reviewed merge.
+# Never pushes to main and never touches upstream: the sync branch and the
+# mirrored upstream release tags are the only things this workflow writes, and
+# integration stays a reviewed merge. Tags are mirrored so the fork's own CI can
+# run `git describe --tags` (validate-versions.js) the same way upstream does.
 
 on:
   schedule:
@@ -64,8 +66,16 @@ jobs:
       - name: Fetch upstream
         run: |
           git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
-          git fetch upstream --prune
+          git fetch upstream --prune --tags
           git fetch origin --prune
+
+      # Mirror upstream's release tags onto the fork. validate-versions.js resolves
+      # the expected version with `git describe --tags`, so without the tags on
+      # origin the fork's own CI fails even when every commit is already synced
+      # (a tag-only gap). Runs unconditionally — a tag can be missing even when
+      # `behind` is 0 — and never force-updates, so it cannot rewrite a tag.
+      - name: Mirror upstream tags to the fork
+        run: git push origin --tags
 
       - name: Check whether upstream is ahead
         id: check
