@@ -36,6 +36,21 @@ const MAX_DESCRIPTION_LENGTH = 1024;
 // CI on line count would block unrelated work on an over-budget skill.
 const MAX_SKILL_LINES = 500;
 
+// The only keys the Agent Skills specification allows at the top level of
+// SKILL.md frontmatter. Anything else — model hints, tool lists, turn limits,
+// host-specific switches — belongs under `metadata` or in a per-agent adapter
+// file (docs/advanced-per-agent-configuration.md). Hosts do not promise to
+// ignore unknown top-level keys, and a published skill carrying one can fail
+// packaging on a strict client, so this is an error rather than a warning.
+const SPEC_FRONTMATTER_KEYS = new Set([
+  'name',
+  'description',
+  'license',
+  'compatibility',
+  'metadata',
+  'allowed-tools',
+]);
+
 // A skill directory name must be lowercase-hyphen-separated
 // (docs/skill-anatomy.md → Naming Conventions).
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -142,6 +157,23 @@ function stripFencedCodeBlocks(content) {
 }
 
 /**
+ * List the top-level keys in the frontmatter block, in file order. Only
+ * column-zero `key:` lines count: indented lines are children of the key
+ * above them (e.g. fields under `metadata`), and `- item` lines are list
+ * entries. Returns [] when there is no frontmatter block.
+ */
+function topLevelFrontmatterKeys(content) {
+  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/);
+  if (!match) return [];
+  const keys = [];
+  for (const line of match[1].split(/\r?\n/)) {
+    const m = line.match(/^([A-Za-z0-9_-]+)\s*:/);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+
+/**
  * Parse YAML-style frontmatter from the top of a markdown file.
  * Returns a key→value object, or null if no frontmatter block found.
  * Values are stripped of surrounding quotes.
@@ -177,13 +209,16 @@ function parseFrontmatter(content) {
  * That was verified once by hand, against all 25 skills, in the #494 thread;
  * this makes it a check instead of a memory.
  *
- * Scope is deliberately narrow — the three shapes a strict parser rejects and
- * the split-on-first-colon parser does not, confirmed against ruby's psych:
+ * Scope is deliberately narrow — the shapes a strict parser rejects and the
+ * split-on-first-colon parser does not, each confirmed by measurement against
+ * both PyYAML and ruby's psych rather than read off the spec:
  *
  *   description: Use this: when X    unquoted value with a colon-space: YAML
  *                                    reads a nested mapping and errors
  *   \tkey: value                      tab indentation: invalid YAML whitespace
  *   description: "unterminated       an unclosed quote
+ *   description: `skill` does X      a value opening with a YAML indicator
+ *                                    (` @ % * ,) or a one-line | / > header
  *
  * It is not a YAML implementation. This repo has no package.json and therefore
  * no parser to depend on, so the check stays a small set of rules aimed at the
@@ -227,8 +262,54 @@ function frontmatterYamlErrors(content) {
       return;
     }
 
-    // Unquoted scalar. A colon followed by a space (or ending the line) makes
-    // YAML read a nested mapping where a plain string was meant.
+    // Unquoted scalar. A plain YAML scalar may not BEGIN with certain indicator
+    // characters. The set below was measured against a real parser rather than
+    // read off the spec, both with and without a following space, and only the
+    // characters invalid in *both* forms with no legitimate single-line use are
+    // rejected — a guard that flags valid frontmatter gets switched off.
+    //
+    // Deliberately not rejected, because each parses cleanly: `:` or `-` when NOT
+    // followed by a space (`:platform`, `-hyphenated`), `#`, `&anchor`, and
+    // `[`/`{`, which begin valid flow collections — `[a, b]` and `{a: b}` both
+    // parse, so flagging the opening bracket would reject valid frontmatter.
+    //
+    // An earlier version of this comment claimed a leading `,`, `]` or `}` also
+    // parsed cleanly. Measured against PyYAML and psych, all three are rejected;
+    // `,` is flagged below. `]` and `}` are left out only because no frontmatter
+    // has ever started with them — say so and they can be added.
+    //
+    // The backtick is the one that bites this repo: descriptions routinely name
+    // other skills, and "`other-skill` designs things" is a natural way to start.
+    if (/^[`@%*,]/.test(value)) {
+      errors.push(
+        `Frontmatter line ${lineNo} starts an unquoted value with '${value[0]}' — YAML reserves ` +
+        `that character and cannot begin a plain scalar with it, so a host parsing this ` +
+        `frontmatter rejects the whole file; wrap the value in quotes`
+      );
+      return;
+    }
+    // `|` and `>` open a block scalar only when nothing follows them on the line.
+    // `|` with indented lines under it is valid and stays allowed; `|foo` is not
+    // a block scalar, it is a plain scalar starting with an indicator, and both
+    // parsers reject it.
+    if (/^[|>]\S/.test(value)) {
+      errors.push(
+        `Frontmatter line ${lineNo} starts an unquoted value with '${value[0]}' followed by text — ` +
+        `YAML reads that as a block scalar header, which may not carry content on its own line, ` +
+        `so a host parsing this frontmatter rejects the whole file; wrap the value in quotes`
+      );
+      return;
+    }
+    if (/^[-?&](\s|$)/.test(value)) {
+      errors.push(
+        `Frontmatter line ${lineNo} starts an unquoted value with '${value[0]} ' — YAML reads ` +
+        `that as an indicator rather than text and rejects the file; wrap the value in quotes`
+      );
+      return;
+    }
+
+    // A colon followed by a space (or ending the line) makes YAML read a nested
+    // mapping where a plain string was meant.
     if (/:(\s|$)/.test(value)) {
       errors.push(
         `Frontmatter line ${lineNo} has an unquoted value containing ': ' — YAML reads that as a ` +
@@ -280,6 +361,18 @@ function lintSkillContent(dirName, content, knownSkills) {
   // The parser above is forgiving by design; the hosts that read this
   // frontmatter are not (#494).
   errors.push(...frontmatterYamlErrors(content));
+
+  // Only the specification's keys may sit at the top level. Vendor and
+  // runtime fields go under `metadata` or in a per-agent adapter file.
+  for (const key of topLevelFrontmatterKeys(content)) {
+    if (!SPEC_FRONTMATTER_KEYS.has(key)) {
+      errors.push(
+        `Frontmatter key '${key}' is not an Agent Skills spec field — top level allows only ` +
+        `${[...SPEC_FRONTMATTER_KEYS].join(', ')}; put vendor or runtime fields under 'metadata' ` +
+        `or in a per-agent adapter file (docs/advanced-per-agent-configuration.md)`
+      );
+    }
+  }
 
   if (!fm.name) {
     errors.push("Frontmatter missing required field: 'name'");
@@ -482,6 +575,7 @@ function lintSkill(dirName, skillsDir, knownSkills) {
 module.exports = {
   stripFencedCodeBlocks,
   parseFrontmatter,
+  topLevelFrontmatterKeys,
   frontmatterYamlErrors,
   extractSkillReferences,
   lintSkillContent,
