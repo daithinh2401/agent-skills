@@ -621,3 +621,70 @@ test('materializes a git baseline and applies a working-tree patch', () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+
+test('fixture baseline commits ignore inherited user signing requirements', () => {
+  const root = makeSandbox();
+  const config = path.join(root, 'global.gitconfig');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'fixture-signing-test-'));
+  try {
+    fs.writeFileSync(config, '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = definitely-missing-eval-signer\n');
+    const result = spawnSync(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      const { materializeWorkspace } = require(${JSON.stringify(path.join(root, 'scripts', 'run-evals.js'))});
+      let workspace;
+      try { workspace = materializeWorkspace({ files: ['project/context.txt'] }); }
+      finally { if (workspace) fs.rmSync(workspace, { recursive: true, force: true }); }
+    `], { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: config, TMPDIR: temp, TMP: temp, TEMP: temp } });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('rejects duplicate behavioral IDs before they can overwrite a grading slot', () => {
+  const root = makeSandbox();
+  try {
+    writeSkill(root, 'alpha-skill', 'Handles alpha widgets. Use when changing alpha widgets.');
+    const evalCase = completeCase('alpha-skill', 'change alpha widget');
+    evalCase.evals.push({ ...behavioralEval(), prompt: 'A different evaluation' });
+    writeJson(path.join(root, 'evals', 'cases', 'alpha-skill.json'), evalCase);
+    const result = run(root);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /duplicate behavioral eval id=1/);
+    const dryRun = run(root, ['--behavioral', 'alpha-skill', '--dry-run']);
+    assert.equal(dryRun.status, 1, dryRun.stdout + dryRun.stderr);
+    assert.match(dryRun.stderr, /duplicate behavioral eval id=1/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('accepts distinct behavioral IDs including zero', () => {
+  const root = makeSandbox();
+  try {
+    writeSkill(root, 'alpha-skill', 'Handles alpha widgets. Use when changing alpha widgets.');
+    const evalCase = completeCase('alpha-skill', 'change alpha widget');
+    evalCase.evals.push({ ...behavioralEval(), id: 0 });
+    writeJson(path.join(root, 'evals', 'cases', 'alpha-skill.json'), evalCase);
+    const result = run(root);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('removes the throwaway workspace when fixture setup fails', () => {
+  const root = makeSandbox();
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-cleanup-test-'));
+  try {
+    const result = spawnSync(process.execPath, ['-e', `
+      const { materializeWorkspace } = require(${JSON.stringify(path.join(root, 'scripts', 'run-evals.js'))});
+      try { materializeWorkspace({ files: ['project/context.txt', 'missing.txt'] }); }
+      catch (error) { console.error(error.message); }
+    `], { cwd: root, encoding: 'utf8', env: { ...process.env, TMPDIR: temp, TMP: temp, TEMP: temp } });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stderr, /fixture listed in files\[\] not found/);
+    assert.deepEqual(fs.readdirSync(temp), [], 'partially copied fixture data must be removed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
