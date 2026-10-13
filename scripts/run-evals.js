@@ -193,6 +193,16 @@ function resolveFixturePath(root, rel) {
   return resolvedPath;
 }
 
+function duplicateEvalIds(evals) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const ev of evals) {
+    if (seen.has(ev.id)) duplicates.add(ev.id);
+    seen.add(ev.id);
+  }
+  return [...duplicates];
+}
+
 // ---------- tier 2 ----------
 
 function runDeterministic(minRank1) {
@@ -233,6 +243,11 @@ function runDeterministic(minRank1) {
       console.log(`  ✗  ${c.file}: no such skill directory`);
       errors++;
       continue;
+    }
+
+    for (const id of duplicateEvalIds(d.evals || [])) {
+      console.log(`  ✗  ${c.file}: duplicate behavioral eval id=${id}`);
+      errors++;
     }
 
     // Schema: behavioral evals (skill-creator evals.json shape)
@@ -389,6 +404,15 @@ function materializeWorkspace(ev) {
   // Fresh throwaway project dir per eval; fixtures (if any) copied in so the
   // agent has real code to operate on rather than describing what it would do.
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-skills-eval-'));
+  try {
+    return initializeWorkspace(ev, workspace);
+  } catch (error) {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function initializeWorkspace(ev, workspace) {
   const setupDirs = new Set();
   for (const rel of ev.files || []) {
     const src = resolveFixturePath(FIXTURES_DIR, rel);
@@ -412,6 +436,7 @@ function materializeWorkspace(ev) {
   // throwaway workspace.
   execFileSync('git', ['init', '--quiet'], { cwd: workspace });
   execFileSync('git', ['config', 'core.autocrlf', 'false'], { cwd: workspace });
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: workspace });
   execFileSync('git', ['config', 'user.name', 'Skill Eval'], { cwd: workspace });
   execFileSync('git', ['config', 'user.email', 'skill-eval@example.invalid'], { cwd: workspace });
   execFileSync('git', ['add', '--all'], { cwd: workspace });
@@ -520,6 +545,11 @@ function runBehavioral(skillName, dryRun) {
   const d = JSON.parse(fs.readFileSync(caseFile, 'utf8'));
   if (!d.evals?.length) {
     console.error(`"${skillName}" has no behavioral evals`);
+    process.exit(1);
+  }
+  const duplicateIds = duplicateEvalIds(d.evals);
+  if (duplicateIds.length) {
+    console.error(`"${skillName}" has duplicate behavioral eval id=${duplicateIds.join(', ')}; each grading slot needs a unique id`);
     process.exit(1);
   }
   if (!dryRun) fs.mkdirSync(RESULTS_DIR, { recursive: true });

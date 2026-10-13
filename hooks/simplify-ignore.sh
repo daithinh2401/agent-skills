@@ -222,6 +222,27 @@ expand_file() {
 }
 
 # ── has_placeholders: is a cached BLOCK_<hash> for $2 still present in file $1? ─
+# -- missing_placeholders: which cached BLOCK_<hash> of $2 are gone from $1? --
+# Prints the missing placeholders, one per line, and returns 0 if any is gone.
+# A placeholder stands for code the model never saw, so it cannot have removed
+# it on purpose; whichever route removed it, the block must not be lost with it.
+missing_placeholders() {
+  local f="$1" fid="$2" bf h bp bs br out=""
+  for bf in "$CACHE/${fid}".block.*; do
+    [ -f "$bf" ] || continue
+    h="${bf##*.}"
+    grep -qF "BLOCK_${h}" "$f" 2>/dev/null && continue
+    bp=""; bs=""; br=""
+    [ -f "$CACHE/${fid}.prefix.${h}" ] && bp=$(cat "$CACHE/${fid}.prefix.${h}")
+    [ -f "$CACHE/${fid}.suffix.${h}" ] && bs=$(cat "$CACHE/${fid}.suffix.${h}")
+    [ -f "$CACHE/${fid}.reason.${h}" ] && br=": $(cat "$CACHE/${fid}.reason.${h}")"
+    out="${out}  ${bp}BLOCK_${h}${br}${bs}
+"
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
 has_placeholders() {
   local f="$1" fid="$2" bf h
   for bf in "$CACHE/${fid}".block.*; do
@@ -245,20 +266,25 @@ if [ -z "$TOOL_NAME" ]; then
       # A change can reach the file through a route that fires no Edit or Write
       # event (a Bash command, a formatter, an external editor), and the backup
       # is stale for all of them. Expand what is on disk rather than overwrite it.
-      if has_placeholders "$orig" "$fid"; then
+      if has_placeholders "$orig" "$fid" && ! missing_placeholders "$orig" "$fid" >/dev/null; then
         EXPANDED="$CACHE/${fid}.$$.expanded"
         expand_file "$orig" "$EXPANDED" "$fid"
         cat "$EXPANDED" > "$orig"
         rm -f "$EXPANDED"
       else
-        # Nothing left to expand — the file was rewritten wholesale, so the
-        # backup is the only remaining copy of the protected blocks. Keep the
-        # rewrite in the cache before the backup overwrites it, so the work is
-        # recoverable rather than lost.
+        # A placeholder is gone — the file was rewritten wholesale, or one
+        # block's line was deleted — so the backup is the only remaining copy
+        # of that protected block. Keep the rewrite in the cache (with any
+        # surviving placeholders expanded) before the backup overwrites it, so
+        # the work is recoverable rather than lost.
         rewritten="$CACHE/${fid}.recovered"
-        cat "$orig" > "$rewritten"
+        if has_placeholders "$orig" "$fid"; then
+          expand_file "$orig" "$rewritten" "$fid" 2>/dev/null
+        else
+          cat "$orig" > "$rewritten"
+        fi
         cat "$bak" > "$orig"
-        printf 'Warning: no BLOCK_ placeholder left in %s, restored from backup. Rewrite kept at %s\n' \
+        printf 'Warning: a BLOCK_ placeholder is missing from %s, restored from backup. Rewrite kept at %s\n' \
           "$orig" "$rewritten" >&2
       fi
       rm -f "$bak" "$pathfile" "$CACHE/${fid}".block.* "$CACHE/${fid}".reason.* "$CACHE/${fid}".prefix.* "$CACHE/${fid}".suffix.*
@@ -329,6 +355,19 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; then
   ID=$(file_id "$FILE_PATH")
   [ -f "$CACHE/${ID}.bak" ] || exit 0
   ls "$CACHE/${ID}".block.* >/dev/null 2>&1 || exit 0
+
+  # The edit removed a placeholder. Expanding now would save a backup without
+  # that block, and Stop would then restore the loss. Keep the last good
+  # backup, leave the file as edited, and tell the model (exit 2 sends stderr
+  # back to it) so it can put the placeholder back; if it does not, Stop
+  # restores the backup and keeps this version as <id>.recovered.
+  if dropped=$(missing_placeholders "$FILE_PATH" "$ID"); then
+    printf '%s\n%s\n%s\n' \
+      "simplify-ignore: this $TOOL_NAME removed placeholder line(s) from $FILE_PATH. Each stands for protected code you cannot see:" \
+      "$dropped" \
+      "Put each one back exactly as shown. Until then the backup is not updated, and at session end the file is restored from it (this version is kept in the cache as .recovered)." >&2
+    exit 2
+  fi
 
   # Expand placeholders, preserving any inline code the model added around them
   EXPANDED="$CACHE/${ID}.$$.expanded"

@@ -466,8 +466,58 @@ else
   assert_eq "Stop restores original + edit byte-identically" "identical" "differs"
 fi
 
+# ── Test 17: a removed placeholder never takes its protected block with it ─
+printf '\nTest 17: Removing a placeholder line does not lose the protected block\n'
+PROJ="$TMPDIR/rt17"; mkdir -p "$PROJ"
+RT="$PROJ/dropped.js"
+cat > "$RT" <<'EOF'
+const a = 1;
+// simplify-ignore-start: first
+const keepOne = 42;
+// simplify-ignore-end
+const b = 2;
+// simplify-ignore-start: second
+const keepTwo = 43;
+// simplify-ignore-end
+EOF
+cp "$RT" "$PROJ/dropped.orig"
+
+rt_hook_event "$PROJ" "Read" "$RT"
+# The model deletes the first placeholder line (it looks like a stray comment)
+# and edits another line in the same Edit.
+awk 'f||!/BLOCK_/{print;next}{f=1}' "$RT" | sed 's/const a = 1;/const a = 9;/' > "$PROJ/t"
+cat "$PROJ/t" > "$RT"
+edit_rc=0
+edit_out=$(rt_hook_event "$PROJ" "Edit" "$RT" 2>&1) || edit_rc=$?
+BAK=$(ls "$PROJ/.claude/.simplify-ignore-cache"/*.bak 2>/dev/null | head -1) || true
+assert_eq "Edit that drops a placeholder exits 2 (stderr goes to the model)" "2" "$edit_rc"
+assert_eq "message names the dropped placeholder" "1" "$(printf '%s' "$edit_out" | grep -c 'BLOCK_.*: first' || true)"
+assert_eq "backup still holds the protected block" "1" "$(grep -c 'const keepOne = 42' "${BAK:-/dev/null}" || true)"
+
+stop_out=$(rt_hook_event "$PROJ" "" "" 2>&1) || true
+RECOVERED=$(ls "$PROJ/.claude/.simplify-ignore-cache"/*.recovered 2>/dev/null | head -1) || true
+assert_eq "Stop puts the protected block back" "1" "$(grep -c 'const keepOne = 42' "$RT" || true)"
+if cmp -s "$RT" "$PROJ/dropped.orig"; then
+  assert_eq "Stop restores the last good backup" "identical" "identical"
 else
-  printf '\nTests 14-16 skipped: jq not available (hook no-ops without it)\n'
+  assert_eq "Stop restores the last good backup" "identical" "differs"
+fi
+assert_eq "the edit is kept as .recovered" "1" "$(grep -c 'const a = 9;' "${RECOVERED:-/dev/null}" || true)"
+assert_eq ".recovered has the surviving block expanded" "1" "$(grep -c 'const keepTwo = 43' "${RECOVERED:-/dev/null}" || true)"
+assert_eq "Stop warns about the missing placeholder" "1" "$(printf '%s' "$stop_out" | grep -c 'placeholder is missing' || true)"
+
+# Same loss through a route that fires no Edit event (Bash, a formatter).
+PROJ="$TMPDIR/rt17b"; mkdir -p "$PROJ"
+RT="$PROJ/dropped.js"
+cp "$TMPDIR/rt17/dropped.orig" "$RT"
+rt_hook_event "$PROJ" "Read" "$RT"
+awk 'f||!/BLOCK_/{print;next}{f=1}' "$RT" > "$PROJ/t"
+cat "$PROJ/t" > "$RT"
+rt_hook_event "$PROJ" "" "" 2>/dev/null || true
+assert_eq "no-event removal: Stop puts the protected block back" "1" "$(grep -c 'const keepOne = 42' "$RT" || true)"
+
+else
+  printf '\nTests 14-17 skipped: jq not available (hook no-ops without it)\n'
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────
