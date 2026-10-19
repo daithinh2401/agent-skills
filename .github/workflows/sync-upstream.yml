@@ -8,7 +8,7 @@ name: Sync from upstream
 
 on:
   schedule:
-    - cron: '0 3 * * 1' # Mondays, 03:00 UTC
+    - cron: '0 17 * * 0' # Mondays, 00:00 Vietnam time (UTC+7)
   workflow_dispatch:
 
 permissions:
